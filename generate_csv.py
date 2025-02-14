@@ -96,7 +96,6 @@ def process_directory(base_path):
                 refs = []
             
             results.append({
-                'cwe': 'CWE-1',
                 'name': name,
                 'description': description,
                 'resolution': resolution,
@@ -120,7 +119,7 @@ def main():
         
         # Write to CSV
         output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vulnerabilities.csv')
-        fieldnames = ['cwe', 'name', 'description', 'resolution', 'exploitation', 'references']
+        fieldnames = ['name', 'description', 'resolution', 'exploitation', 'references']
         
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
