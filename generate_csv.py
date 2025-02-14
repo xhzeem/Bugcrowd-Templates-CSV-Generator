@@ -4,6 +4,63 @@ import requests
 import zipfile
 import io
 import shutil
+import json
+
+def get_vrt_data():
+    vrt_url = "https://raw.githubusercontent.com/bugcrowd/vulnerability-rating-taxonomy/master/vulnerability-rating-taxonomy.json"
+    try:
+        response = requests.get(vrt_url)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Error fetching VRT data: {str(e)}")
+        return None  # Will be handled as unclassified in get_vrt_category
+
+def get_vrt_category(path, vrt_data):
+    if not vrt_data:
+        return 'unclassified', []  # Default to unclassified if no VRT data
+    
+    path_parts = path.split(os.sep)
+    vrt_path = '/'.join(path_parts)
+    
+    def search_category(categories, target_path, hierarchy=None):
+        if hierarchy is None:
+            hierarchy = []
+            
+        for category in categories:
+            if category.get('id', '') in target_path:
+                # Get name and priority from the category
+                priority = category.get('priority', '')
+                name = category.get('name', '')
+                current_hierarchy = hierarchy + [name] if name else hierarchy
+                
+                if priority:
+                    # Map Bugcrowd priorities to literal severity words
+                    priority_levels = ('critical', 'high', 'medium', 'low', 'info')
+                    # Convert priority to int if it's a string
+                    try:
+                        priority_num = int(priority) if isinstance(priority, str) else priority
+                        # Check if priority is within valid range
+                        if 1 <= priority_num <= 5:
+                            # Subtract 1 from priority since tuple is 0-indexed
+                            return priority_levels[priority_num - 1], current_hierarchy
+                    except (ValueError, TypeError):
+                        pass
+                    return 'unclassified', current_hierarchy
+                
+                # Check children categories
+                children = category.get('children', [])
+                if children:
+                    child_result = search_category(children, target_path, current_hierarchy)
+                    if child_result[0]:
+                        return child_result
+                
+                # If no priority found, default to unclassified
+                return 'unclassified', current_hierarchy
+        return None, []
+    
+    result, hierarchy = search_category(vrt_data.get('content', []), vrt_path)
+    return result if result else 'unclassified', hierarchy
 
 def download_templates():
     # GitHub repository URL
@@ -65,6 +122,7 @@ def clean_recommendation_content(content):
 
 def process_directory(base_path):
     results = []
+    vrt_data = get_vrt_data()
     
     for root, dirs, files in os.walk(base_path):
         if 'template.md' in files and 'recommendations.md' in files:
@@ -73,9 +131,15 @@ def process_directory(base_path):
             if rel_path == '.':
                 continue
                 
-            # Create hierarchical name
-            name_parts = rel_path.split(os.sep)
-            name = ' - '.join(part.replace('_', ' ').title() for part in name_parts)
+            # Get exploitation category and VRT name from VRT data
+            exploitation, vrt_name = get_vrt_category(rel_path, vrt_data)
+            
+            # If VRT name is not available, create hierarchical name from folder structure
+            if not vrt_name:
+                name_parts = rel_path.split(os.sep)
+                name = ' - '.join(part.replace('_', ' ').title() for part in name_parts)
+            else:
+                name = ' - '.join(vrt_name)
             
             # Read template.md for description
             template_path = os.path.join(root, 'template.md')
@@ -99,7 +163,7 @@ def process_directory(base_path):
                 'name': name,
                 'description': description,
                 'resolution': resolution,
-                'exploitation': 'unclassified',
+                'exploitation': exploitation,
                 'references': ', '.join(refs) if refs else ''
             })
     
@@ -118,7 +182,7 @@ def main():
         results = process_directory(templates_dir)
         
         # Write to CSV
-        output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vulnerabilities.csv')
+        output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bugcrowd_vrt.csv')
         fieldnames = ['name', 'description', 'resolution', 'exploitation', 'references']
         
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
